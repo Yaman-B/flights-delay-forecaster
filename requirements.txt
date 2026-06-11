@@ -1,0 +1,17 @@
+pandas>=2.2
+pyarrow
+numpy
+scikit-learn
+lightgbm
+xgboost
+shap
+meteostat
+mlflow
+dvc
+matplotlib
+seaborn
+jupyter
+fastapi
+uvicorn
+streamlit
+pytest
