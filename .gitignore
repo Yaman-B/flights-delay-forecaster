@@ -1,7 +1,10 @@
-data/
+/data/
 *.parquet
 *.zip
+/docs/narrative.md
 __pycache__/
+*.pyc
 .ipynb_checkpoints/
 mlruns/
 .env
+.venv/
