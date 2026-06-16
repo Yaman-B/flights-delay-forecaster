@@ -269,4 +269,75 @@ fig.tight_layout()
 fig.savefig(FIG_DIR / "disruption_vs_snowfall_orig_vs_dest.png", dpi=150)
 print("saved ->", FIG_DIR / "disruption_vs_snowfall_orig_vs_dest.png")
 
-# %%
+# %% --- Wind gusts vs disruption: origin vs destination -------------------
+
+GUST_O, GUST_D = "wind_gusts_10m_orig", "wind_gusts_10m_dest"
+d = pd.read_parquet(DATA_PATH, columns=[GUST_O, GUST_D, "disrupted"])
+base_rate = d["disrupted"].mean()
+print(f"Base rate: {base_rate:.4f}  |  rows: {len(d):,}\n")
+
+# Units + distribution check (gusts should be km/h; median ~tens, tail ~100+).
+print("Origin gust quantiles (km/h):")
+print(d[GUST_O].describe(percentiles=[.5, .9, .99, .999]).round(1))
+print("\nDestination gust quantiles (km/h):")
+print(d[GUST_D].describe(percentiles=[.5, .9, .99, .999]).round(1))
+
+# Gust bins (km/h). ~50-65+ is where crosswind limits start to bite.
+BINS   = [-0.1, 20, 35, 50, 65, np.inf]
+LABELS = ["0-20", "20-35", "35-50", "50-65", "65+"]
+
+def wilson_ci(k, n, z=1.96):
+    if n == 0: return (np.nan, np.nan)
+    p = k/n; den = 1 + z**2/n
+    c = (p + z**2/(2*n))/den
+    h = z*np.sqrt(p*(1-p)/n + z**2/(4*n**2))/den
+    return (c-h, c+h)
+
+def binned_table(values, target, bins, labels):
+    t = (pd.DataFrame({"y": target, "b": pd.cut(values, bins, labels=labels)})
+         .groupby("b", observed=True)["y"].agg(rate="mean", k="sum", n="count"))
+    ci = [wilson_ci(k, n) for k, n in zip(t["k"], t["n"])]
+    t["ci_low"]  = [c[0] for c in ci]
+    t["ci_high"] = [c[1] for c in ci]
+    t["lift"] = t["rate"]/base_rate
+    return t
+
+og = binned_table(d[GUST_O], d["disrupted"], BINS, LABELS)
+dg = binned_table(d[GUST_D], d["disrupted"], BINS, LABELS)
+compare = pd.DataFrame({
+    "orig_rate": og["rate"], "orig_n": og["n"], "orig_lift": og["lift"],
+    "dest_rate": dg["rate"], "dest_n": dg["n"], "dest_lift": dg["lift"],
+})
+pd.set_option("display.float_format", lambda v: f"{v:,.4f}")
+print("\nGUSTS — ORIGIN vs DESTINATION:\n", compare)
+compare.to_csv(TBL_DIR / "disruption_gusts_orig_vs_dest.csv")
+
+# %% --- Grouped bar: gust disruption, origin vs destination ---------------
+fig, ax = plt.subplots(figsize=(10, 6))
+x, w = np.arange(len(LABELS)), 0.38
+def draw(off, tbl, color, label):
+    rates = tbl["rate"].to_numpy()*100
+    yerr = np.vstack([(tbl["rate"]-tbl["ci_low"]).to_numpy(),
+                      (tbl["ci_high"]-tbl["rate"]).to_numpy()])*100
+    ax.bar(x+off, rates, w, yerr=yerr, capsize=3, color=color,
+           edgecolor="white", label=label, zorder=3)
+    for xi, (top, n) in enumerate(zip(tbl["ci_high"]*100, tbl["n"])):
+        ax.text(x[xi]+off, top+1.0, f"{n:,}", ha="center", va="bottom",
+                fontsize=6.5, color="#555")
+draw(-w/2, og, "#3b6ea5", "Origin gusts")
+draw(+w/2, dg, "#7a9e54", "Destination gusts")
+ax.axhline(base_rate*100, ls="--", lw=1, color="#444", zorder=2)
+ax.text(len(LABELS)-0.4, base_rate*100+1.2, f"overall {base_rate*100:.1f}%", ha="right", color="#444")
+ax.set_xticks(x); ax.set_xticklabels(LABELS)
+ax.set_xlabel("Peak wind gust in scheduled hour (km/h) — departure (origin) / arrival (destination)")
+ax.set_ylabel("Disruption rate (%)")
+ax.set_title("Disruption vs wind gusts: origin vs destination")
+ax.legend(frameon=False)
+ymax = max(og["ci_high"].max(), dg["ci_high"].max())*100
+ax.set_ylim(0, ymax + 8)
+ax.spines[["top","right"]].set_visible(False)
+fig.tight_layout()
+fig.savefig(FIG_DIR / "disruption_vs_gusts_orig_vs_dest.png", dpi=150)
+print("saved ->", FIG_DIR / "disruption_vs_gusts_orig_vs_dest.png")
+
+
