@@ -8,3 +8,11 @@ __pycache__/
 mlruns/
 .env
 .venv/
+
+# packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# pytest
+.pytest_cache/
