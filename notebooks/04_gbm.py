@@ -1,21 +1,31 @@
 # %% --- Setup --------------------------------------------------------------
-import sys
+import sys, os, tempfile
 from pathlib import Path
-# Make `import src` work in the kernel: the kernel runs from notebooks/, so the
-# repo root isn't on sys.path by default. Anchor to the pyproject.toml marker.
+
+# Put the repo root on sys.path so `import src` works from notebooks/.
 ROOT = next(p for p in [Path.cwd(), *Path.cwd().parents] if (p / "pyproject.toml").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
 import numpy as np, pandas as pd
-from src.paths import DATA_PATH, TARGET_COL
+import matplotlib.pyplot as plt
+import lightgbm as lgb
+import shap, joblib, mlflow
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import precision_recall_curve, precision_score, recall_score, f1_score
+
+from src.paths import DATA_PATH, TARGET_COL, FIG_DIR, PROJECT_ROOT
 from src.models import temporal_split, evaluate
+from src.features.cascade import add_cascade_features, CASCADE_COLS
+
+mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
+mlflow.set_registry_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
+mlflow.set_experiment("flight-delay-gbm")
 print("src OK ->", __import__("src").__file__)
 
-# %% --- Cascade validation (ONE-TIME diagnostic; safe to skip on re-runs) ---
-# Independently re-derives the cascade to (1) reproduce the EDA's 13%->76% and
-# (2) confirm the censoring behaves. The model does NOT use anything from here;
-# it builds its features via add_cascade_features in the GBM cell below.
-from src.models import wilson_ci
+# %% --- Cascade validation (one-time diagnostic; not used by the model) ----
+# Re-derives the cascade independently to reproduce the EDA 13%->76% pattern and
+# confirm censoring. The model builds features via add_cascade_features below.
 d = pd.read_parquet(DATA_PATH, columns=["Tail_Number", "dep_hour_utc", "arr_hour_utc",
                                         "CRSDepTime", "ArrDelayMinutes", TARGET_COL])
 d["dep_hour_utc"] = pd.to_datetime(d["dep_hour_utc"])
@@ -47,19 +57,16 @@ def buckets(series, title):
     t = L.groupby(pd.cut(series, BINS, labels=LAB), observed=True)[TARGET_COL].agg(rate="mean", n="count")
     t["lift"] = t["rate"] / base
     print(title, "\n", t.round(4), "\n")
-buckets(L["_raw_inbound"],      "RAW inbound delay  (EDA reproduction, NOT a model input)")
-buckets(L["inbound_delay_obs"], "CENSORED inbound_delay_obs  (leakage-safe, the model input)")
+buckets(L["_raw_inbound"],      "RAW inbound delay (EDA reproduction)")
+buckets(L["inbound_delay_obs"], "CENSORED inbound_delay_obs (model input)")
 print(f"inbound still airborne at our dep: {L['inbound_unlanded'].mean():.1%} of linked")
 print("  disruption | unlanded:", round(L.loc[L.inbound_unlanded == 1, TARGET_COL].mean(), 4))
 print("  disruption | landed:  ", round(L.loc[L.inbound_unlanded == 0, TARGET_COL].mean(), 4))
 
 # %% --- LightGBM with the leakage-safe cascade -----------------------------
-import lightgbm as lgb
-from src.features.cascade import add_cascade_features, CASCADE_COLS
-
 CAT   = ["Origin", "Dest", "Reporting_Airline", "hour", "month", "dow"]
 NUM_W = ["snowfall_orig", "snowfall_dest", "wind_gusts_10m_orig",
-         "wind_gusts_10m_dest", "temperature_2m_orig"]   # temp: GBM can use its U-shape
+         "wind_gusts_10m_dest", "temperature_2m_orig"]
 
 cols = list({*CAT[:3], "CRSDepTime", "FlightDate", "Tail_Number", "dep_hour_utc",
              "arr_hour_utc", "ArrDelayMinutes", *NUM_W, TARGET_COL})
@@ -69,7 +76,7 @@ fd = pd.to_datetime(m["FlightDate"])
 m["hour"], m["month"], m["dow"] = (m["CRSDepTime"].astype(int)//100) % 24, fd.dt.month, fd.dt.dayofweek
 m = add_cascade_features(m)
 for c in CAT:
-    m[c] = m[c].astype("category")          # LightGBM uses category dtype natively
+    m[c] = m[c].astype("category")          # LightGBM handles category dtype natively
 
 FEATURES = CAT + NUM_W + CASCADE_COLS
 tr, va, te = (m[m["split"] == s] for s in ("train", "val", "test"))
@@ -94,8 +101,8 @@ print(ladder.round(4))
 imp = pd.Series(gbm.feature_importance("gain"), index=FEATURES).sort_values(ascending=False)
 print("\nTop features by gain:\n", imp.round(0))
 
-# %% --- Ablation: identical GBM, cascade features REMOVED ------------------
-FEATURES_NOCAS = CAT + NUM_W   # everything except CASCADE_COLS
+# %% --- Ablation: identical GBM without the cascade features ---------------
+FEATURES_NOCAS = CAT + NUM_W
 
 dtrain_nc = lgb.Dataset(tr[FEATURES_NOCAS], tr[TARGET_COL])
 dval_nc   = lgb.Dataset(va[FEATURES_NOCAS], va[TARGET_COL], reference=dtrain_nc)
@@ -115,16 +122,7 @@ print(f"Cascade = {(full-nocas)/(full-0.4022):.0%} of the LR->full jump; "
       f"+{(full-nocas)/nocas:.0%} over the no-cascade GBM")
 
 # %% --- MLflow: log the two trained runs (no retraining) -------------------
-import os, tempfile, mlflow
-from src.paths import PROJECT_ROOT
-
-mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")   # local SQLite backend
-mlflow.set_registry_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
-mlflow.set_experiment("flight-delay-gbm")
-
 def log_run(run_name, model, features, params, test_metrics):
-    """Record an already-trained LightGBM run to MLflow: params, test metrics,
-    the feature list, gain importances, and the model file itself."""
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params(params)
         mlflow.log_param("n_features", len(features))
@@ -143,10 +141,8 @@ log_run("lightgbm_full_cascade", gbm,    FEATURES,       params, res)
 log_run("lightgbm_no_cascade",   gbm_nc, FEATURES_NOCAS, params, res_nc)
 
 # %% --- Calibration: measure -> fit on VAL -> re-measure on test -----------
-from sklearn.isotonic import IsotonicRegression
-
 def reliability(y_true, y_prob, n_bins=10):
-    """Quantile-binned reliability table + Expected Calibration Error (ECE)."""
+    """Quantile-binned reliability table + Expected Calibration Error."""
     edges = np.unique(np.quantile(y_prob, np.linspace(0, 1, n_bins + 1)))
     b = pd.cut(y_prob, edges, include_lowest=True)
     t = (pd.DataFrame({"y": y_true, "p": y_prob, "bin": b})
@@ -156,15 +152,14 @@ def reliability(y_true, y_prob, n_bins=10):
     return t, ece
 
 y_te = te[TARGET_COL].to_numpy()
-p_te = gbm.predict(te[FEATURES])                      # raw probabilities (full model)
+p_te = gbm.predict(te[FEATURES])
 
 tbl_raw, ece_raw = reliability(y_te, p_te)
 print(f"RAW: mean predicted {p_te.mean():.4f} vs actual {y_te.mean():.4f} | ECE {ece_raw:.4f}")
 print(tbl_raw.round(4), "\n")
 
-# Fit the calibrator on VAL only (2025), then apply to test.
 p_va = gbm.predict(va[FEATURES])
-iso  = IsotonicRegression(out_of_bounds="clip").fit(p_va, va[TARGET_COL].to_numpy())
+iso  = IsotonicRegression(out_of_bounds="clip").fit(p_va, va[TARGET_COL].to_numpy())  # fit on VAL only
 p_te_cal = iso.predict(p_te)
 
 tbl_cal, ece_cal = reliability(y_te, p_te_cal)
@@ -173,10 +168,8 @@ print(tbl_cal.round(4), "\n")
 
 print("raw       :", {k: round(v, 4) for k, v in evaluate(y_te, p_te).items()})
 print("calibrated:", {k: round(v, 4) for k, v in evaluate(y_te, p_te_cal).items()})
-# %% --- Reliability diagram (before vs after) ------------------------------
-import matplotlib.pyplot as plt
-from src.paths import FIG_DIR
 
+# %% --- Reliability diagram (before vs after) ------------------------------
 fig, ax = plt.subplots(figsize=(6, 6))
 ax.plot([0, 1], [0, 1], "--", color="#888", label="perfect calibration")
 ax.plot(tbl_raw["mean_pred"], tbl_raw["obs_freq"], "o-", color="#c0504d", label=f"raw (ECE {ece_raw:.3f})")
@@ -184,16 +177,10 @@ ax.plot(tbl_cal["mean_pred"], tbl_cal["obs_freq"], "o-", color="#3b6ea5", label=
 ax.set_xlabel("Mean predicted probability"); ax.set_ylabel("Observed disruption frequency")
 ax.set_title("Reliability: GBM before vs after isotonic calibration")
 ax.legend(frameon=False); ax.set_aspect("equal")
-fig.tight_layout()
-fig.savefig(FIG_DIR / "reliability_calibration.png", dpi=150)
+fig.tight_layout(); fig.savefig(FIG_DIR / "reliability_calibration.png", dpi=150)
 print("saved ->", FIG_DIR / "reliability_calibration.png")
-# %% --- Log the calibration run to MLflow ----------------------------------
-import os, tempfile, joblib, mlflow
-from src.paths import PROJECT_ROOT, FIG_DIR
 
-mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")   # same backend as before
-mlflow.set_experiment("flight-delay-gbm")
-
+# %% --- MLflow: log the calibration run ------------------------------------
 with mlflow.start_run(run_name="isotonic_calibration"):
     mlflow.log_metrics({
         "ece_raw": float(ece_raw), "ece_calibrated": float(ece_cal),
@@ -208,19 +195,18 @@ with mlflow.start_run(run_name="isotonic_calibration"):
         joblib.dump(iso, path)
         mlflow.log_artifact(path)
 print("calibration run logged")
-# %% --- Threshold tuning: choose the operating point on VAL ----------------
-from sklearn.metrics import precision_recall_curve, precision_score, recall_score, f1_score
 
-# Tune on VALIDATION (2025), raw model (our headline discriminator); report on TEST.
+# %% --- Threshold tuning: choose the operating point on VAL ----------------
+# Tune on VAL (2025); report on TEST.
 y_va, p_va = va[TARGET_COL].to_numpy(), gbm.predict(va[FEATURES])
 y_te, p_te = te[TARGET_COL].to_numpy(), gbm.predict(te[FEATURES])
 
-prec, rec, thr = precision_recall_curve(y_va, p_va)   # thr has one fewer than prec/rec
+prec, rec, thr = precision_recall_curve(y_va, p_va)   # thr is one shorter than prec/rec
 prec, rec = prec[:-1], rec[:-1]
 f1 = np.where((prec + rec) > 0, 2 * prec * rec / (prec + rec), 0.0)
 
-t_f1  = float(thr[np.argmax(f1)])                       # threshold maximizing val F1
-t_rec = float(thr[np.argmin(np.abs(rec - 0.80))])       # threshold giving ~80% val recall
+t_f1  = float(thr[np.argmax(f1)])
+t_rec = float(thr[np.argmin(np.abs(rec - 0.80))])
 points = {"default 0.50": 0.50, "max-F1 (val)": t_f1, "high-recall ~80% (val)": t_rec}
 
 def at(t, y, p):
@@ -231,11 +217,9 @@ def at(t, y, p):
 
 tbl = pd.DataFrame({n: at(t, y_te, p_te) for n, t in points.items()}).T
 tbl = tbl[["threshold", "precision", "recall", "f1", "flagged_rate"]]
-print("Operating points (threshold picked on VAL, metrics on TEST):\n", tbl.round(4))
-# %% --- Operating-point curve: precision/recall/F1 vs threshold (val) ------
-import matplotlib.pyplot as plt
-from src.paths import FIG_DIR
+print("Operating points (threshold on VAL, metrics on TEST):\n", tbl.round(4))
 
+# %% --- Operating-point curve: precision/recall/F1 vs threshold (val) ------
 fig, ax = plt.subplots(figsize=(8, 5))
 ax.plot(thr, prec, label="precision", color="#3b6ea5")
 ax.plot(thr, rec,  label="recall",    color="#c0504d")
@@ -247,12 +231,8 @@ ax.set_title("Precision / recall / F1 vs threshold (validation)")
 ax.legend(frameon=False); ax.spines[["top", "right"]].set_visible(False)
 fig.tight_layout(); fig.savefig(FIG_DIR / "threshold_operating_points.png", dpi=150)
 print("saved ->", FIG_DIR / "threshold_operating_points.png")
-# %% --- Log threshold tuning to MLflow -------------------------------------
-import mlflow
-from src.paths import PROJECT_ROOT, FIG_DIR
-mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
-mlflow.set_experiment("flight-delay-gbm")
 
+# %% --- MLflow: log threshold tuning ---------------------------------------
 best = tbl.loc["max-F1 (val)"]
 with mlflow.start_run(run_name="threshold_tuning"):
     mlflow.log_param("tuned_on", "val_2025")
@@ -263,4 +243,56 @@ with mlflow.start_run(run_name="threshold_tuning"):
                         "test_flagged_rate": float(best["flagged_rate"])})
     mlflow.log_artifact(str(FIG_DIR / "threshold_operating_points.png"))
 print("threshold tuning logged | max-F1 threshold:", round(t_f1, 4))
+
+# %% --- SHAP: exact per-flight attributions (TreeSHAP) ---------------------
+S = te.sample(5000, random_state=42)
+X_sample = S[FEATURES]
+
+contribs  = gbm.predict(X_sample, pred_contrib=True)   # exact TreeSHAP, margin (log-odds) space
+shap_vals = contribs[:, :-1]
+base_val  = contribs[:, -1]
+
+raw_margin = gbm.predict(X_sample, raw_score=True)
+err = float(np.abs(shap_vals.sum(1) + base_val - raw_margin).max())
+print("additivity check | max reconstruction error:", err)
+print("base margin:", round(float(base_val[0]), 4),
+      "-> base prob:", round(float(1/(1+np.exp(-base_val[0]))), 4))
+
+X_plot = X_sample.copy()                                # categoricals -> codes for plot coloring
+for c in X_plot.select_dtypes("category").columns:
+    X_plot[c] = X_plot[c].cat.codes
+expl = shap.Explanation(values=shap_vals, base_values=base_val,
+                        data=X_plot.to_numpy(), feature_names=list(FEATURES))
+
+mean_abs = pd.Series(np.abs(shap_vals).mean(0), index=FEATURES).sort_values(ascending=False)
+print("\nMean |SHAP| (log-odds units):\n", mean_abs.round(4))
+
+# %% --- SHAP global views: beeswarm + bar ----------------------------------
+shap.plots.beeswarm(expl, max_display=16, show=False)
+plt.title("SHAP summary — impact on disruption log-odds")
+plt.tight_layout(); plt.savefig(FIG_DIR / "shap_beeswarm.png", dpi=150, bbox_inches="tight"); plt.close()
+
+shap.plots.bar(expl, max_display=16, show=False)
+plt.title("Mean |SHAP| per feature")
+plt.tight_layout(); plt.savefig(FIG_DIR / "shap_bar.png", dpi=150, bbox_inches="tight"); plt.close()
+print("saved -> shap_beeswarm.png, shap_bar.png")
+
+# %% --- SHAP local: why THIS flight? (the Phase 4 LLM input) ---------------
+p_sample = gbm.predict(X_sample)
+i_hi, i_lo = int(np.argmax(p_sample)), int(np.argmin(p_sample))
+for tag, i in [("highrisk", i_hi), ("lowrisk", i_lo)]:
+    print(f"{tag}: predicted {p_sample[i]:.3f} | actually disrupted = {int(S[TARGET_COL].iloc[i])}")
+    shap.plots.waterfall(expl[i], max_display=12, show=False)
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / f"shap_waterfall_{tag}.png", dpi=150, bbox_inches="tight"); plt.close()
+print("saved -> shap_waterfall_highrisk.png, shap_waterfall_lowrisk.png")
+
+# %% --- MLflow: log the SHAP analysis --------------------------------------
+with mlflow.start_run(run_name="shap_analysis"):
+    mlflow.log_param("shap_sample_size", len(X_sample))
+    mlflow.log_dict(mean_abs.round(6).to_dict(), "mean_abs_shap.json")
+    for fn in ["shap_beeswarm.png", "shap_bar.png",
+               "shap_waterfall_highrisk.png", "shap_waterfall_lowrisk.png"]:
+        mlflow.log_artifact(str(FIG_DIR / fn))
+print("SHAP analysis logged to MLflow")
 # %%
