@@ -295,4 +295,36 @@ with mlflow.start_run(run_name="shap_analysis"):
                "shap_waterfall_highrisk.png", "shap_waterfall_lowrisk.png"]:
         mlflow.log_artifact(str(FIG_DIR / fn))
 print("SHAP analysis logged to MLflow")
+# %% --- Test the FlightExplainer handoff -----------------------------
+import json
+from src.llm.explain import FlightExplainer
+
+explainer = FlightExplainer(
+    model=gbm, calibrator=iso, features=FEATURES,
+    base_rate=float(m[TARGET_COL].mean()),
+    cat_dtypes={c: m[c].dtype for c in CAT},
+)
+for tag, i in [("HIGH", i_hi), ("LOW", i_lo)]:
+    print(f"\n===== {tag}-RISK FLIGHT =====")
+    print(json.dumps(explainer.explain(S.iloc[i]), indent=2, default=str))
+
+# %%
+# %% --- First LLM explanations -----------------------------------
+from anthropic import Anthropic
+from src.llm.narrate import narrate
+
+import importlib, src.llm.explain, src.llm.narrate
+importlib.reload(src.llm.explain); importlib.reload(src.llm.narrate)
+from src.llm.explain import FlightExplainer
+from src.llm.narrate import narrate
+explainer = FlightExplainer(model=gbm, calibrator=iso, features=FEATURES,
+                            base_rate=float(m[TARGET_COL].mean()),
+                            cat_dtypes={c: m[c].dtype for c in CAT})
+
+client = Anthropic()
+for tag, i in [("HIGH", i_hi), ("LOW", i_lo)]:
+    obj = explainer.explain(S.iloc[i])
+    print(f"\n===== {tag}-RISK: {obj['flight']['origin']}->{obj['flight']['dest']}, "
+          f"p={obj['prediction']['probability']:.3f} ({obj['prediction']['risk_level']}) =====")
+    print(narrate(obj, client=client))
 # %%
