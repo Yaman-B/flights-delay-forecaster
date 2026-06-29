@@ -327,4 +327,50 @@ for tag, i in [("HIGH", i_hi), ("LOW", i_lo)]:
     print(f"\n===== {tag}-RISK: {obj['flight']['origin']}->{obj['flight']['dest']}, "
           f"p={obj['prediction']['probability']:.3f} ({obj['prediction']['risk_level']}) =====")
     print(narrate(obj, client=client))
+# %% --- Persist the model bundle (eval + serving load this, no retraining) -
+import json
+from src.paths import PROJECT_ROOT
+
+MODELS_DIR = PROJECT_ROOT / "models"
+MODELS_DIR.mkdir(exist_ok=True)
+gbm.save_model(str(MODELS_DIR / "gbm.txt"))
+joblib.dump(iso, MODELS_DIR / "calibrator_isotonic.joblib")
+with open(MODELS_DIR / "config.json", "w") as f:
+    json.dump({"features": FEATURES, "cat_features": CAT, "num_features": NUM_W,
+               "base_rate": float(m[TARGET_COL].mean()), "threshold": 0.25,
+               "cat_categories": {c: list(m[c].cat.categories) for c in CAT}}, f, indent=2)
+print("saved model bundle ->", MODELS_DIR)
+
+# %% --- Freeze the stratified 250-flight faithfulness eval set -------------
+EVAL_DIR = PROJECT_ROOT / "reports" / "eval"
+EVAL_DIR.mkdir(parents=True, exist_ok=True)
+
+# Calibrated probability + risk tier for ALL test flights (vectorized).
+te_cal = iso.predict(gbm.predict(te[FEATURES]))
+tier = np.where(te_cal >= 0.50, "high", np.where(te_cal >= 0.25, "elevated", "low"))
+strat = pd.DataFrame({"cal_prob": te_cal, "risk_tier": tier,
+                      "has_inbound": te["has_inbound"].to_numpy()}, index=te.index)
+
+# Equal coverage across the 6 (tier x has_inbound) cells -> deliberately
+# over-samples the rare hard cells (high-risk, no-inbound) that random
+# sampling would miss. The frozen parquet is the reproducible artifact.
+N_TOTAL, SEED = 250, 7
+cells = strat.groupby(["risk_tier", "has_inbound"]).groups
+per_cell = N_TOTAL // len(cells)
+picked = []
+for key, idx in cells.items():
+    take = min(per_cell, len(idx))
+    picked.extend(pd.Series(list(idx)).sample(take, random_state=SEED).tolist())
+if len(picked) < N_TOTAL:                                   # top up from the rest
+    rest = strat.drop(index=picked).sample(N_TOTAL - len(picked), random_state=SEED)
+    picked.extend(rest.index.tolist())
+
+eval_idx = pd.Index(picked)
+eval_set = m.loc[eval_idx].copy()                           # full rows, category dtypes preserved
+eval_set["_cal_prob"]  = strat.loc[eval_idx, "cal_prob"].to_numpy()
+eval_set["_risk_tier"] = strat.loc[eval_idx, "risk_tier"].to_numpy()
+eval_set.to_parquet(EVAL_DIR / "eval_set.parquet")
+
+print(f"frozen eval set: {len(eval_set)} flights -> {EVAL_DIR / 'eval_set.parquet'}")
+print(eval_set.groupby(["_risk_tier", "has_inbound"]).size())
 # %%

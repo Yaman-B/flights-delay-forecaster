@@ -1,9 +1,9 @@
 """Phase 3 -> Phase 4 handoff: turn one flight into a structured explanation.
 
 FlightExplainer bundles the trained model, the isotonic calibrator, and a
-feature-to-language mapping. Its explain() emits a JSON-serializable object --
+feature-to-language mapping. explain() emits a JSON-serializable object --
 calibrated probability, risk tier, and the top signed SHAP drivers as readable
-clauses -- which is the ONLY thing the LLM layer is permitted to draw on.
+clauses -- the ONLY thing the LLM layer is permitted to draw on.
 """
 import numpy as np
 import pandas as pd
@@ -15,7 +15,6 @@ _CASCADE = {"inbound_gap_h", "inbound_delay_obs", "inbound_buffer_min", "inbound
 
 
 def _clean(v):
-    """Coerce numpy/pandas scalars to plain JSON-friendly Python values."""
     if v is None or (np.isscalar(v) and pd.isna(v)):
         return None
     if isinstance(v, np.integer):
@@ -37,7 +36,6 @@ def _hour_phrase(h):
 
 
 def _phrase(feature, value, up):
-    """Readable clause for one driver; `up` is True when it pushes risk up."""
     f = feature
     if f == "inbound_buffer_min":
         if up:
@@ -95,38 +93,48 @@ def _magnitude(abs_shap, bands=(0.3, 1.0)):
     lo, hi = bands
     return "strong" if abs_shap >= hi else "moderate" if abs_shap >= lo else "slight"
 
+
 def _prob_text(p):
-    """ human-readable probability phrase; never 0% or 100%."""
+    """Clamped, human-readable probability phrase -- never 0% or 100%."""
     if p >= 0.995: return "over 99%"
     if p < 0.01:   return "under 1%"
     return f"about {int(round(p * 100))}%"
 
+
 class FlightExplainer:
-    def __init__(self, model, calibrator, features, base_rate, cat_dtypes,
+    def __init__(self, model, calibrator, features, base_rate, cat_categories,
                  threshold=0.25, top_up=5, top_down=3, floor=0.1, mag_bands=(0.3, 1.0)):
         self.model = model
         self.calibrator = calibrator
         self.features = list(features)
         self.base_rate = float(base_rate)
-        self.cat_dtypes = dict(cat_dtypes)
+        # cat_categories: {feature: [ordered training categories]} -> code = index.
+        self.cat_categories = {c: list(v) for c, v in cat_categories.items()}
+        self._codes = {c: {v: i for i, v in enumerate(cats)}
+                       for c, cats in self.cat_categories.items()}
         self.threshold = threshold
         self.top_up, self.top_down = top_up, top_down
         self.floor, self.mag_bands = floor, mag_bands
 
-    def _row_to_frame(self, s):
-        # Rebuild a 1-row frame with the EXACT training dtypes so category codes
-        # (and therefore the prediction and its SHAP values) match training.
-        X = pd.DataFrame([s[self.features].values], columns=self.features)
+    def _row_to_features(self, s):
+        # 1-row float array of feature CODES in self.features order. Categoricals
+        # -> their TRAINING integer code (independent of any reloaded dtype);
+        # this is what makes prediction + SHAP correct on a saved/reloaded model.
+        vals = []
         for c in self.features:
-            X[c] = X[c].astype(self.cat_dtypes[c]) if c in self.cat_dtypes else pd.to_numeric(X[c])
-        return X
+            if c in self._codes:
+                vals.append(float(self._codes[c].get(s[c], -1)))   # -1 = unseen
+            else:
+                v = s[c]
+                vals.append(float(v) if pd.notna(v) else np.nan)
+        return np.array(vals, dtype=float).reshape(1, -1)
 
     def _risk_level(self, p):
         return "high" if p >= 0.50 else "elevated" if p >= self.threshold else "low"
 
     def explain(self, flight):
         s = flight if isinstance(flight, pd.Series) else pd.Series(flight)
-        X = self._row_to_frame(s)
+        X = self._row_to_features(s)
 
         raw = float(self.model.predict(X)[0])
         prob = float(self.calibrator.predict([raw])[0]) if self.calibrator is not None else raw
@@ -157,8 +165,9 @@ class FlightExplainer:
                 "date": str(pd.to_datetime(s["FlightDate"]).date()) if "FlightDate" in s.index else None,
             },
             "prediction": {
-                "probability": max(round(prob, 4), 0.0001), "base_rate": round(self.base_rate, 4),
+                "probability": max(round(prob, 4), 0.0001),
                 "probability_text": _prob_text(prob),
+                "base_rate": round(self.base_rate, 4),
                 "risk_level": self._risk_level(prob),
                 "flagged": bool(prob >= self.threshold), "threshold": self.threshold,
             },
