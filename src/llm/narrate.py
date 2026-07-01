@@ -30,3 +30,24 @@ def narrate(explanation, client=None, model="claude-haiku-4-5", max_tokens=300, 
                    "Write the disruption-risk explanation for this flight."}],
     )
     return "".join(b.text for b in msg.content if b.type == "text").strip()
+
+NAIVE_SYSTEM = """You write short flight-disruption-risk explanations for travelers. A flight is "disrupted" if it arrives 15+ minutes late or is cancelled.
+
+You are given a flight's predicted disruption probability and some basic facts about it. Write a 2-4 sentence explanation of why this flight has the risk it does, in plain language for a traveler."""
+
+
+def narrate_naive(explanation, client=None, model="claude-haiku-4-5", max_tokens=300, temperature=0):
+    """BASELINE: prediction + raw flight facts, NO structured drivers, NO faithfulness
+    rules. The 'before' arm for the faithfulness ablation."""
+    import json
+    client = client or Anthropic()
+    f, p = explanation["flight"], explanation["prediction"]
+    facts = {"origin": f["origin"], "dest": f["dest"], "carrier": f["carrier"],
+             "departure_hour": f["dep_hour_local"], "date": f["date"],
+             "predicted_disruption_probability": p["probability_text"]}
+    msg = client.messages.create(
+        model=model, max_tokens=max_tokens, temperature=temperature, system=NAIVE_SYSTEM,
+        messages=[{"role": "user", "content":
+                   f"<flight>\n{json.dumps(facts, default=str)}\n</flight>\n\n"
+                   "Write the disruption-risk explanation."}])
+    return "".join(b.text for b in msg.content if b.type == "text").strip()
