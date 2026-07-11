@@ -302,7 +302,7 @@ from src.llm.explain import FlightExplainer
 explainer = FlightExplainer(
     model=gbm, calibrator=iso, features=FEATURES,
     base_rate=float(m[TARGET_COL].mean()),
-    cat_dtypes={c: m[c].dtype for c in CAT},
+    cat_categories={c: list(m[c].cat.categories) for c in CAT},
 )
 for tag, i in [("HIGH", i_hi), ("LOW", i_lo)]:
     print(f"\n===== {tag}-RISK FLIGHT =====")
@@ -319,7 +319,7 @@ from src.llm.explain import FlightExplainer
 from src.llm.narrate import narrate
 explainer = FlightExplainer(model=gbm, calibrator=iso, features=FEATURES,
                             base_rate=float(m[TARGET_COL].mean()),
-                            cat_dtypes={c: m[c].dtype for c in CAT})
+                            cat_categories={c: list(m[c].cat.categories) for c in CAT})
 
 client = Anthropic()
 for tag, i in [("HIGH", i_hi), ("LOW", i_lo)]:
@@ -374,3 +374,15 @@ eval_set.to_parquet(EVAL_DIR / "eval_set.parquet")
 print(f"frozen eval set: {len(eval_set)} flights -> {EVAL_DIR / 'eval_set.parquet'}")
 print(eval_set.groupby(["_risk_tier", "has_inbound"]).size())
 # %%
+# %% --- Carve the slim serving slice (test period, features prebuilt) ------
+SERVE_DIR = PROJECT_ROOT / "serving_data"
+SERVE_DIR.mkdir(exist_ok=True)
+
+keep = FEATURES + ["FlightDate", "Tail_Number", TARGET_COL]
+slim = m[m["split"] == "test"][keep].copy()
+slim["flight_id"] = slim.index
+slim.to_parquet(SERVE_DIR / "flights.parquet", index=False)
+
+mb = (SERVE_DIR / "flights.parquet").stat().st_size / 1e6
+print(f"serving slice: {len(slim):,} flights, {mb:.1f} MB -> {SERVE_DIR / 'flights.parquet'}")
+print("date range:", slim['FlightDate'].min(), "->", slim['FlightDate'].max())
