@@ -1,4 +1,3 @@
-# src/models/__init__.py
 from .splitting import temporal_split
 from .metrics import evaluate, wilson_ci
 from .baselines import majority_baseline, climatology_baseline

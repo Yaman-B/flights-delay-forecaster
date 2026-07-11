@@ -1,9 +1,7 @@
-"""Phase 3 -> Phase 4 handoff: turn one flight into a structured explanation.
+"""Turn one flight into a structured explanation object.
 
-FlightExplainer bundles the trained model, the isotonic calibrator, and a
-feature-to-language mapping. explain() emits a JSON-serializable object --
-calibrated probability, risk tier, and the top signed SHAP drivers as readable
-clauses -- the ONLY thing the LLM layer is permitted to draw on.
+explain() returns a calibrated probability, a risk tier, and the top signed SHAP
+drivers as readable clauses. That object is the only thing the LLM layer may draw on.
 """
 import numpy as np
 import pandas as pd
@@ -95,7 +93,7 @@ def _magnitude(abs_shap, bands=(0.3, 1.0)):
 
 
 def _prob_text(p):
-    """Clamped, human-readable probability phrase -- never 0% or 100%."""
+    """Human-readable probability phrase, clamped so it never reads 0% or 100%."""
     if p >= 0.995: return "over 99%"
     if p < 0.01:   return "under 1%"
     return f"about {int(round(p * 100))}%"
@@ -108,7 +106,7 @@ class FlightExplainer:
         self.calibrator = calibrator
         self.features = list(features)
         self.base_rate = float(base_rate)
-        # cat_categories: {feature: [ordered training categories]} -> code = index.
+        # {feature: [ordered training categories]}; a category's code is its index.
         self.cat_categories = {c: list(v) for c, v in cat_categories.items()}
         self._codes = {c: {v: i for i, v in enumerate(cats)}
                        for c, cats in self.cat_categories.items()}
@@ -117,9 +115,10 @@ class FlightExplainer:
         self.floor, self.mag_bands = floor, mag_bands
 
     def _row_to_features(self, s):
-        # 1-row float array of feature CODES in self.features order. Categoricals
-        # -> their TRAINING integer code (independent of any reloaded dtype);
-        # this is what makes prediction + SHAP correct on a saved/reloaded model.
+        # one-row float array in self.features order. categorical codes come from
+        # the training category order, never from a reloaded pandas dtype, which
+        # renumbers categories on load; without this, prediction and SHAP go
+        # quietly wrong on a saved model.
         vals = []
         for c in self.features:
             if c in self._codes:
@@ -136,6 +135,10 @@ class FlightExplainer:
         s = flight if isinstance(flight, pd.Series) else pd.Series(flight)
         X = self._row_to_features(s)
 
+        # the calibrator only touches the probability we show a user. attributions
+        # stay on the raw model, where SHAP contributions are additive in log-odds;
+        # isotonic is monotone but not additive, so calibrating first would break
+        # the sum-to-prediction property the drivers rely on.
         raw = float(self.model.predict(X)[0])
         prob = float(self.calibrator.predict([raw])[0]) if self.calibrator is not None else raw
 

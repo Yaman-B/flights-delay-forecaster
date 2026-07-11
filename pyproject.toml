@@ -11,3 +11,8 @@ requires-python = ">=3.10"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src", "src.*"]
+
+[tool.ruff.lint]
+# E701: the aligned one-line dispatch returns in _hour_phrase, _prob_text and
+# list_flights read as lookup tables. keeping them on one line is intentional.
+ignore = ["E701"]

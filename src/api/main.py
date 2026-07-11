@@ -1,8 +1,8 @@
-"""FastAPI serving layer: flight disruption risk + grounded explanation.
+"""FastAPI serving layer: disruption risk plus a grounded explanation.
 
-Serves historical flights from a prebuilt slice (features already constructed by
-the training pipeline, so leakage-safety is preserved by construction). A live
-deployment would swap the slice for a real-time feature pipeline.
+Flights come from a prebuilt slice whose features were built by the training
+pipeline, so leakage-safety holds by construction. A live deployment would swap
+the slice for a real-time feature pipeline.
 """
 import json
 from contextlib import asynccontextmanager
@@ -13,6 +13,10 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from fastapi import Request
 
 from src.paths import PROJECT_ROOT
 from src.llm.explain import FlightExplainer
@@ -21,10 +25,9 @@ from src.llm.narrate import narrate
 STATE = {}
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load once at startup, not per request.
+    # model, calibrator and flight slice load once at startup, not per request.
     models, serving = PROJECT_ROOT / "models", PROJECT_ROOT / "serving_data"
     config = json.loads((models / "config.json").read_text())
     booster = lgb.Booster(model_file=str(models / "gbm.txt"))
@@ -40,13 +43,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Flight Disruption Forecaster", version="1.0", lifespan=lifespan)
 
+# rate limit the LLM endpoint; a public /explain is otherwise an open faucet
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 class FlightRequest(BaseModel):
     flight_id: int
 
+
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse("/docs")
+
 
 @app.get("/health")
 def health():
@@ -93,7 +103,8 @@ def predict(req: FlightRequest):
 
 
 @app.post("/explain")
-def explain(req: FlightRequest):
+@limiter.limit("10/minute")
+def explain(request: Request, req: FlightRequest):
     """Prediction + natural-language explanation (calls the Anthropic API)."""
     obj = STATE["explainer"].explain(_row(req.flight_id))
     try:

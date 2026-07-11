@@ -1,15 +1,15 @@
-"""The one true temporal split. Importing this everywhere is what keeps the
-baseline ladder and the model strictly comparable."""
+"""The single temporal split. Everything imports this one, which is what keeps
+the baseline ladder and the model strictly comparable."""
 import pandas as pd
 
 
 def temporal_split(dates):
-    """Assign each flight to a split by calendar period (temporal, NOT random):
-        train = 2023-2024,  val = 2025,  test = 2026+ (Q1 only in current data).
+    """Split by calendar period, never at random: train = 2023-2024, val = 2025,
+    test = 2026+ (Q1 only in current data).
 
-    Temporal splitting prevents leakage and deliberately exposes the year-over-
-    year drift (train 23.1% -> test 24.5%) that a random split would hide.
-    Returns an object Series aligned to the input's index.
+    Temporal ordering prevents leakage and exposes the year-over-year drift
+    (train 23.1% -> test 24.5%) that a random split would hide. Returns an object
+    Series aligned to the input index.
     """
     d = pd.to_datetime(dates)
     if not isinstance(d, pd.Series):

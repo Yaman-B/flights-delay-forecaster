@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-# Top ~40 US airports by traffic: IATA -> (lat, lon)
+# top ~40 US airports by traffic: IATA -> (lat, lon)
 AIRPORTS = {
     "ATL": (33.6407, -84.4277), "DFW": (32.8998, -97.0403),
     "DEN": (39.8561, -104.6737), "ORD": (41.9742, -87.9073),
@@ -91,7 +91,7 @@ def main():
         time.sleep(1)  # stay friendly to the free API
 
     if not frames:
-        raise SystemExit("No data fetched for any airport — check your connection.")
+        raise SystemExit("No data fetched for any airport. Check your connection.")
     combined = pd.concat(frames, ignore_index=True)
     combined.to_parquet(OUT_DIR / "all_airports_hourly.parquet", index=False)
     print(f"done: {len(combined):,} hourly observations, {combined['airport'].nunique()} airports")

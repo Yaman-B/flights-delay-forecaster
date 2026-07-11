@@ -1,8 +1,7 @@
 """LLM-as-judge: score one explanation's faithfulness against its structured object.
 
-Returns a per-dimension verdict (fabrication / direction_error / certainty_language
-/ probability_misrepresented, each with an evidence span). The overall `faithful`
-flag is derived in code from those four dimensions, not produced by the model.
+Returns a verdict per dimension, each with an evidence span. The overall `faithful`
+flag is derived in code from the four dimensions, never produced by the model.
 """
 import json
 from anthropic import Anthropic
@@ -34,13 +33,14 @@ Output ONLY a single JSON object and nothing else — no reasoning, no analysis,
 
 
 def _parse(raw):
+    """Pull the verdict JSON out of a model reply that may be fenced or padded."""
     s = raw.strip()
-    if "```" in s:                                # take fenced block if present
+    if "```" in s:
         parts = s.split("```")
-        s = max(parts, key=len)                   # the largest fence chunk = the JSON
+        s = max(parts, key=len)                   # longest fence chunk is the JSON
         if s.lstrip().startswith("json"):
             s = s.lstrip()[4:]
-    a, b = s.find("{"), s.rfind("}")              # slice the outermost { ... }
+    a, b = s.find("{"), s.rfind("}")              # outermost { ... }
     if a == -1 or b == -1:
         raise ValueError(f"no JSON object found: {raw[:200]}")
     return json.loads(s[a:b + 1])
@@ -56,7 +56,7 @@ def judge(analysis, explanation, client=None, model="claude-sonnet-4-6", max_tok
                                  messages=[{"role": "user", "content": user}])
     raw = "".join(b.text for b in msg.content if b.type == "text").strip()
     v = _parse(raw)
-    for d in DIMENSIONS:                           # schema guard -> caught & retried on failure
+    for d in DIMENSIONS:                           # schema guard; caller catches and retries
         if d not in v or "present" not in v[d]:
             raise ValueError(f"malformed verdict ({d}): {raw[:200]}")
         v[d]["present"] = bool(v[d]["present"])

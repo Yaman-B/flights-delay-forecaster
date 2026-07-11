@@ -1,0 +1,17 @@
+-r requirements.txt
+
+# analysis
+# imported by notebooks/ only, never by src/. shap backs the attribution figures
+# in 04_gbm; src/llm/explain.py uses LightGBM's own pred_contrib TreeSHAP and
+# does not need this package.
+matplotlib==3.10.9
+mlflow==3.13.0
+shap==0.52.0
+
+# notebooks
+# jupyter is not imported anywhere; it is here to run notebooks/ interactively.
+jupyter==1.1.1
+
+# dev
+pytest==9.0.3
+ruff==0.15.21

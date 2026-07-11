@@ -1,4 +1,4 @@
-"""Non-learned reference baselines -- the bar every real model must clear."""
+"""Non-learned reference baselines: the bar every real model must clear."""
 import numpy as np
 import pandas as pd
 

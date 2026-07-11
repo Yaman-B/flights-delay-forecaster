@@ -6,12 +6,12 @@ Usage:
 Each monthly zip is ~25 MB and contains a single CSV (~600k flights).
 Source: Bureau of Transportation Statistics, transtats.bts.gov (public domain).
 
-Notes:
-- transtats.bts.gov serves an incomplete SSL certificate chain. We attempt a
-  verified connection first and fall back to unverified (with a warning) if
-  needed. The data itself is public domain.
-- Downloads go to a .part file and are validated as real zips before being
-  renamed, so interrupted runs never leave corrupt files that get skipped later.
+transtats.bts.gov serves an incomplete SSL certificate chain, so the download
+tries a verified connection first and falls back to unverified with a warning.
+The data is public domain.
+
+Downloads land in a .part file and are validated as real zips before being
+renamed, so an interrupted run never leaves a corrupt file that gets skipped later.
 """
 import argparse
 import sys

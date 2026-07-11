@@ -1,9 +1,9 @@
 """Leakage-safe inbound-delay cascade features.
 
-At the prediction cutoff (a flight's SCHEDULED departure) we may not know the
-inbound aircraft's final arrival delay. So we use only what's observable then:
-the inbound delay right-censored at the scheduled turnaround slack, the slack
-itself, the realized spare buffer, and a 'still airborne' flag.
+At the prediction cutoff (a flight's scheduled departure) the inbound aircraft's
+final arrival delay may not be known yet, so these features use only what is
+observable by then: the inbound delay right-censored at the scheduled turnaround
+slack, the slack itself, the realized spare buffer, and a 'still airborne' flag.
 """
 import numpy as np
 import pandas as pd

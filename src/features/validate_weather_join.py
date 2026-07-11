@@ -4,13 +4,12 @@ Usage:
     python src/features/validate_weather_join.py
 
 Four checks:
-  1. Coverage      -- match rates and unresolved-time counts.
-  2. Cross-airport -- Honolulu never snows; a northern airport does. If the join
-                      scrambled airports, this is what catches it.
-  3. Temporal      -- Boston's snowiest hours must fall in winter months.
-  4. Storm spot    -- Boston's snowiest day in Jan 2024 should be the Jan 6-7
-                      nor'easter (winter-storm-warning weekend; that season's
-                      standout snow event).
+  1. Coverage:      match rates and unresolved-time counts.
+  2. Cross-airport: Honolulu never snows, a northern airport does. Catches a join
+                    that scrambled airports.
+  3. Temporal:      Boston's snowiest hours must fall in winter months.
+  4. Storm spot:    Boston's snowiest day in Jan 2024 should be the Jan 6-7
+                    nor'easter, that season's standout snow event.
 Exit code is nonzero if any hard invariant fails.
 """
 from pathlib import Path
@@ -49,7 +48,7 @@ def main() -> None:
     hnl = by_airport.get("HNL", 0.0)
     north = {a: by_airport.get(a, float("nan")) for a in ("MSP", "DEN", "BOS", "ORD")}
     print(f"[cross-air] HNL max origin snowfall: {hnl:.3f} (expect ~0)")
-    print(f"[cross-air] northern hubs max snowfall: "
+    print("[cross-air] northern hubs max snowfall: "
           + ", ".join(f"{a}={v:.2f}" for a, v in north.items()))
     hnl_ok = hnl < 0.5
     north_ok = max(v for v in north.values() if v == v) > 1.0
@@ -57,13 +56,12 @@ def main() -> None:
     print(f"[cross-air] Honolulu-never-snows: {'OK' if hnl_ok else 'FAIL'}; "
           f"northern-hubs-do: {'OK' if north_ok else 'FAIL'}")
 
-    # --- 3. Temporal: snow concentrates in the cold season and NEVER in summer.
-    #        The summer-zero check is the real invariant -- a scrambled-timestamp
-    #        join would smear snow across all months, so snow on a Jun-Aug Boston
-    #        flight would betray it. Dec-Feb alone is too narrow to gate on:
-    #        March (and some November) are genuine Boston snow months, so we
-    #        report the cold-season fractions for context but only HARD-FAIL on
-    #        snow appearing in summer.
+    # --- 3. Temporal: snow concentrates in the cold season and never in summer.
+    #        summer-zero is the real invariant: a scrambled-timestamp join would
+    #        smear snow across all months, so snow on a Jun-Aug Boston flight
+    #        would betray it. gating on Dec-Feb alone would be too narrow, since
+    #        March and some November are genuine Boston snow months. cold-season
+    #        fractions are reported for context; only summer snow hard-fails.
     bos_all = df[df["Origin"] == "BOS"].dropna(subset=[snow_o, "dep_hour_utc"]).copy()
     bos_all["dep_dt"] = pd.to_datetime(bos_all["dep_hour_utc"])
     snowing = bos_all[bos_all[snow_o] > 0]    # only hours where it actually snowed
@@ -80,9 +78,8 @@ def main() -> None:
           f"(summer fraction must be ~0)")
 
     # --- 4. Storm spot-check: Jan 2024 Boston nor'easter -----------------------
-    # Mean over ALL Boston flight-hours that day (zeros included), so the metric
-    # matches what was validated previously and a quiet day can't spike on a
-    # single snowy hour.
+    # mean over all Boston flight-hours that day, zeros included, so a quiet day
+    # can't spike on a single snowy hour.
     jan = bos_all[(bos_all["dep_dt"].dt.year == 2024) &
                   (bos_all["dep_dt"].dt.month == 1)].copy()
     jan["day"] = jan["dep_dt"].dt.date
@@ -94,8 +91,8 @@ def main() -> None:
     storm_ok = snowiest in ("2024-01-06", "2024-01-07")
     print(f"[storm] snowiest day = {snowiest}; expected 2024-01-06/07  "
           f"[{'OK' if storm_ok else 'CHECK'}]")
-    # Not a hard failure -- a snow-poor winter can shuffle a quiet day in -- but
-    # if this is not the Jan 6-7 weekend, eyeball it before proceeding.
+    # not a hard failure, since a snow-poor winter can shuffle a quiet day to the
+    # top. if it isn't the Jan 6-7 weekend, eyeball it before proceeding.
 
     print("\nHARD INVARIANTS:", "PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)

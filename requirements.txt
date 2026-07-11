@@ -1,17 +1,27 @@
-pandas>=2.2
-pyarrow
-numpy
-scikit-learn
-lightgbm
-xgboost
-shap
-meteostat
-mlflow
-dvc
-matplotlib
-seaborn
-jupyter
-fastapi
-uvicorn
-streamlit
-pytest
+# runtime dependencies only: what src/ imports, plus the ASGI server.
+# this is what the Docker image installs. analysis/notebook extras live in
+# requirements-dev.txt.
+
+# data/ml
+# scikit-learn is pinned exactly: models/calibrator_isotonic.joblib unpickles to
+# an IsotonicRegression, and a version skew there corrupts calibrated
+# probabilities silently instead of raising.
+joblib==1.5.3
+lightgbm==4.6.0
+numpy==2.4.6
+pandas==2.3.3
+pyarrow==24.0.0
+requests==2.34.2
+scikit-learn==1.9.0
+urllib3==2.7.0
+slowapi==0.1.9
+
+# llm
+anthropic==0.112.0
+
+# serving
+altair==6.2.1
+fastapi==0.136.3
+pydantic==2.13.4
+streamlit==1.58.0
+uvicorn==0.49.0

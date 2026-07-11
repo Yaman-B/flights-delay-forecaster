@@ -2,7 +2,7 @@
 no matter where a script or notebook is launched from."""
 from pathlib import Path
 
-# paths.py lives at <repo>/src/paths.py -> the repo root is two levels up.
+# this file is <repo>/src/paths.py, so parents[1] is the repo root.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DATA_PATH  = PROJECT_ROOT / "data" / "processed" / "flights_weather.parquet"

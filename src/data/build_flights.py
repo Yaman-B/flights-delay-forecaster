@@ -31,7 +31,7 @@ AIRPORTS = {
     "HNL", "DAL", "PDX", "STL", "RDU", "HOU", "SMF", "MSY", "SJC", "SNA",
 }
 
-# Canonical BTS column name -> output name (kept identical; rename later if desired)
+# canonical BTS column names, kept as-is on output
 WANTED = [
     "FlightDate", "Reporting_Airline", "Tail_Number",
     "Flight_Number_Reporting_Airline", "Origin", "Dest",

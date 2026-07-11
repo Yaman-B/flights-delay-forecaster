@@ -30,9 +30,9 @@ FLIGHTS = Path("data/processed/flights_clean.parquet")
 WEATHER = Path("data/raw/weather/all_airports_hourly.parquet")
 OUT = Path("data/processed/flights_weather.parquet")
 
-# Per-airport IANA timezones for all 40 airports in the dataset.
-# America/Phoenix and Pacific/Honolulu do NOT observe daylight saving -- the two
-# cases a fixed-offset shortcut would get wrong for part of the year.
+# per-airport IANA timezones for all 40 airports in the dataset. America/Phoenix
+# and Pacific/Honolulu do not observe daylight saving, the two cases a fixed-offset
+# shortcut would get wrong for part of the year.
 AIRPORT_TZ = {
     "ATL": "America/New_York",   "DFW": "America/Chicago",    "DEN": "America/Denver",
     "ORD": "America/Chicago",    "LAX": "America/Los_Angeles","CLT": "America/New_York",

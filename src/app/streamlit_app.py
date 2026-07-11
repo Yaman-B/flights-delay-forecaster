@@ -1,18 +1,37 @@
 """Streamlit demo: browse a flight, see its disruption risk, drivers, and a
 grounded natural-language explanation. Thin client over the FastAPI service."""
 import os
-import requests
-import pandas as pd
-import streamlit as st
 import re
+
 import altair as alt
+import pandas as pd
+import requests
+import streamlit as st
 
 API = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Flight Disruption Forecaster", page_icon="✈️", layout="wide")
 st.title("✈️ Flight Disruption Forecaster")
-st.caption("Predicts the probability a flight arrives 15+ min late or is cancelled "
+st.caption("Predicts the probability a flight arrives 15+ minutes late or is cancelled, "
            "and explains why, grounded in the model's own SHAP attributions.")
+
+with st.expander("Why does this demo score flights that already happened?"):
+    st.markdown(
+        "**It's a backtest, which is how forecasting systems are evaluated.**\n\n"
+        "The model was trained on 2023 to 2024 and is tested on January to March 2026, "
+        "a period it never saw during training. Every feature it uses is one that would "
+        "be available *before* the flight departs: the schedule, the route, the carrier, "
+        "forecast weather (joined on scheduled times, not actual ones), and the inbound "
+        "aircraft's status as known at the scheduled departure time.\n\n"
+        "So these are true forecasts. The flights are in the past for you, but for the "
+        "model they are the future: it predicts using only what would have been knowable "
+        "an hour before pushback, and we score it against what actually happened. That's "
+        "the only way to know whether a forecaster works without waiting a year to find out.\n\n"
+        "**Going live is primarily a data problem.** A real-time deployment "
+        "would swap the historical lookup for three feeds: published schedules, a weather "
+        "forecast for the origin and destination hours, and live aircraft status for the "
+        "inbound leg. The model itself would not change."
+    )
 
 
 @st.cache_data(ttl=600)
@@ -43,7 +62,7 @@ date = c3.selectbox("Date", opts["dates"])
 
 res = get_flights(origin, dest, date)
 if not res["flights"]:
-    st.warning("No flights on that route and date — try another combination.")
+    st.warning("No flights on that route and date. Try another combination.")
     st.stop()
 
 labels = {f"{f['dep_hour']:02d}:00 · {f['carrier']} · flight {f['flight_id']}": f["flight_id"]
@@ -54,11 +73,9 @@ fid = labels[choice]
 obj = requests.post(f"{API}/predict", json={"flight_id": fid}, timeout=15).json()
 p, drivers = obj["prediction"], obj["drivers"]
 
-# --- risk headline -----------------------------------------------------------
-COLORS = {"low": "#2e7d32", "elevated": "#ef6c00", "high": "#c62828"}
-
-HL = "#ffd166"   # highlight color for grounded terms
-
+# --- grounded-term highlighting ----------------------------------------------
+# feature -> the phrasings _phrase() can emit for it, so the UI can mark up the
+# narration without re-parsing it.
 KEY_TERMS = {
     "inbound_buffer_min":  ["spare turnaround time", "turnaround time", "buffer time", "buffer"],
     "inbound_delay_obs":   ["behind schedule", "minutes behind", "running late"],
@@ -86,7 +103,7 @@ def _hour_variants(h):
 
 
 def bold_drivers(text, drivers):
-    """Highlight the terms the explanation is grounded in — deterministic, UI-side only."""
+    """Highlight the terms the explanation is grounded in. Deterministic, UI-side only."""
     terms = set()
     for d in drivers["increasing"] + drivers["decreasing"]:
         f, v = d["feature"], d["value"]
@@ -99,14 +116,15 @@ def bold_drivers(text, drivers):
             terms.add(_DOW[int(v)])
         elif f in ("Origin", "Dest", "Reporting_Airline"):
             terms.add(str(v))
-    for t in sorted(terms, key=len, reverse=True):     # longest first
+    for t in sorted(terms, key=len, reverse=True):     # longest first, so a short term can't clip a longer one
         if not t:
             continue
         text = re.sub(rf"(?<![*\w])({re.escape(t)})(?![\w*])",
-                      rf"**:orange[\1]**", text, flags=re.I)
+                      r"**:orange[\1]**", text, flags=re.I)
     return text
 
 
+# --- risk headline -----------------------------------------------------------
 m1, m2, m3 = st.columns(3)
 m1.metric("Disruption risk", p["probability_text"], p["risk_level"].upper())
 m2.metric("Typical flight", f"{p['base_rate']:.0%}", "base rate")
@@ -114,13 +132,27 @@ m3.metric("Flagged?", "YES" if p["flagged"] else "no", f"threshold {p['threshold
 st.progress(min(p["probability"], 1.0))
 
 # --- explanation (the slow call) --------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_explanation(flight_id: int):
+    """Cached server-side: one LLM call per flight, ever (deterministic at temp 0)."""
+    r = requests.post(f"{API}/explain", json={"flight_id": flight_id}, timeout=60)
+    if r.status_code == 200:
+        return True, r.json()["explanation"]
+    return False, r.json().get("detail", r.text)
+
+
 st.subheader("Why?")
 with st.spinner("Generating explanation…"):
     try:
-        text = requests.post(f"{API}/explain", json={"flight_id": fid}, timeout=60).json()["explanation"]
-        st.info(bold_drivers(text, drivers))
+        ok, payload = get_explanation(fid)
+        if ok:
+            st.info(bold_drivers(payload, drivers))
+        else:
+            st.warning(f"Explanation unavailable: {payload}\n\n"
+                       "The prediction and drivers below are unaffected.")
     except Exception as e:
-        st.warning(f"Explanation unavailable ({e}). The prediction and drivers below are unaffected.")
+        st.warning(f"Explanation unavailable: {e}. "
+                   "The prediction and drivers below are unaffected.")
 
 # --- the drivers the explanation is grounded in ------------------------------
 st.subheader("Model drivers (SHAP)")

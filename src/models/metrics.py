@@ -1,7 +1,7 @@
-"""Locked evaluation metrics. PR_AUC is primary (imbalance-honest); ROC_AUC
-secondary; F1 at a fixed threshold is an operating-point check (tune separately);
-Brier tracks calibration (needed for the LLM layer); accuracy is a cautionary
-foil only -- never optimized."""
+"""Locked evaluation metrics. PR_AUC is primary (imbalance-honest), ROC_AUC
+secondary, F1 at a fixed threshold an operating-point check (tuned separately),
+Brier the calibration tracker the LLM layer depends on. Accuracy is a cautionary
+foil, never optimized."""
 import numpy as np
 from sklearn.metrics import (average_precision_score, roc_auc_score,
                              f1_score, brier_score_loss, accuracy_score)

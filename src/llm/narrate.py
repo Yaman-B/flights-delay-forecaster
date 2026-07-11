@@ -1,8 +1,7 @@
 """Turn a FlightExplainer object into a grounded, traveler-facing explanation.
 
-The structured object is the ONLY sanctioned source of facts; the system prompt
-constrains the model to it so the output stays faithful (and the faithfulness
-eval can score it against the same object).
+The structured object is the only sanctioned source of facts; the system prompt
+holds the model to it, which is what the faithfulness eval scores against.
 """
 import json
 from anthropic import Anthropic
@@ -31,15 +30,15 @@ def narrate(explanation, client=None, model="claude-haiku-4-5", max_tokens=300, 
     )
     return "".join(b.text for b in msg.content if b.type == "text").strip()
 
+
 NAIVE_SYSTEM = """You write short flight-disruption-risk explanations for travelers. A flight is "disrupted" if it arrives 15+ minutes late or is cancelled.
 
 You are given a flight's predicted disruption probability and some basic facts about it. Write a 2-4 sentence explanation of why this flight has the risk it does, in plain language for a traveler."""
 
 
 def narrate_naive(explanation, client=None, model="claude-haiku-4-5", max_tokens=300, temperature=0):
-    """BASELINE: prediction + raw flight facts, NO structured drivers, NO faithfulness
-    rules. The 'before' arm for the faithfulness ablation."""
-    import json
+    """Ablation baseline: raw flight facts, no structured drivers, no faithfulness
+    rules. The 'before' arm of the faithfulness comparison."""
     client = client or Anthropic()
     f, p = explanation["flight"], explanation["prediction"]
     facts = {"origin": f["origin"], "dest": f["dest"], "carrier": f["carrier"],
