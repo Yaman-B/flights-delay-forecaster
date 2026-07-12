@@ -21,7 +21,8 @@ RUN chmod +x docker-entrypoint.sh
 
 # streamlit_app.py reads this; both processes share the container's localhost
 ENV API_URL=http://127.0.0.1:8000 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=7860
 
 EXPOSE 8000 8501
 

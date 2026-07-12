@@ -17,6 +17,8 @@ for i in $(seq 1 30); do
 done
 
 exec streamlit run src/app/streamlit_app.py \
-  --server.port 8501 \
+  --server.port "${PORT:-7860}" \
   --server.address 0.0.0.0 \
-  --server.headless true
+  --server.headless true \
+  --server.enableCORS false \
+  --server.enableXsrfProtection false
