@@ -166,7 +166,7 @@ destination weather downward, since diversions are exactly what severe destinati
 If you just want to try it, use the [live demo](https://huggingface.co/spaces/yamanb/flight-delay-forecaster).
 This section is for reproducing the results locally.
  
-    git clone <this-repo> && cd flight_delay_forecaster
+    git clone https://github.com/Yaman-B/flights-delay-forecaster && cd flight_delay_forecaster
     python -m venv .venv && source .venv/bin/activate
     pip install -r requirements-dev.txt
  
